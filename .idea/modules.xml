@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/RI.iml" filepath="$PROJECT_DIR$/.idea/RI.iml" />
+      <module fileurl="file://$PROJECT_DIR$/mri-indexer/mri-indexer.iml" filepath="$PROJECT_DIR$/mri-indexer/mri-indexer.iml" />
+    </modules>
+  </component>
+</project>
