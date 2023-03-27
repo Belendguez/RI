@@ -23,31 +23,17 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.util.ArrayList;
 import java.util.Date;
-import java.util.List;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.demo.knn.DemoEmbeddings;
 import org.apache.lucene.demo.knn.KnnVectorDict;
-import org.apache.lucene.document.Document;
-import org.apache.lucene.document.Field;
-import org.apache.lucene.document.KnnVectorField;
-import org.apache.lucene.document.LongPoint;
-import org.apache.lucene.document.StringField;
-import org.apache.lucene.document.TextField;
-import org.apache.lucene.index.DirectoryReader;
-import org.apache.lucene.index.IndexReader;
-import org.apache.lucene.index.IndexWriter;
-import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.document.*;
+import org.apache.lucene.index.*;
 import org.apache.lucene.index.IndexWriterConfig.OpenMode;
-import org.apache.lucene.index.Term;
-import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.IOUtils;
@@ -109,7 +95,6 @@ public class IndexFiles implements AutoCloseable {
                 case "-numThreads":
                     numThreads = Integer.parseInt(args[++i]);
                     break;
-
                 default:
                     throw new IllegalArgumentException("unknown parameter " + args[i]);
             }
@@ -132,23 +117,22 @@ public class IndexFiles implements AutoCloseable {
                             + "' does not exist or is not readable, please check the path");
             System.exit(1);
         }
-
         Date start = new Date();
-        try {
-            System.out.println("Indexing to directory '" + indexPath + "'...");
-            Directory dir = FSDirectory.open(Paths.get(indexPath));
+        System.out.println("Indexing to directory '" + indexPath + "'...");
 
-            Analyzer analyzer = new StandardAnalyzer();
-            IndexWriterConfig iwc = new IndexWriterConfig(analyzer);
+        Directory dir = FSDirectory.open(Paths.get(indexPath));
+        Analyzer analyzer = new StandardAnalyzer();
+        IndexWriterConfig iwc = new IndexWriterConfig(analyzer);
 
-            if (create) {
-                // Create a new index in the directory, removing any
-                // previously indexed documents:
-                iwc.setOpenMode(OpenMode.CREATE);
-            } else {
-                // Add new documents to an existing index:
-                iwc.setOpenMode(OpenMode.CREATE_OR_APPEND);
-            }
+        if (create) {
+            // Create a new index in the directory, removing any
+            // previously indexed documents:
+            iwc.setOpenMode(OpenMode.CREATE);
+        } else {
+            // Add new documents to an existing index:
+            iwc.setOpenMode(OpenMode.CREATE_OR_APPEND);
+        }
+
 
             // Optional: for better indexing performance, if you
             // are indexing many documents, increase the RAM
@@ -156,8 +140,6 @@ public class IndexFiles implements AutoCloseable {
             // size to the JVM (eg add -Xmx512m or -Xmx1g):
             //
             // iwc.setRAMBufferSizeMB(256.0);
-
-
             // Creamos la instancia compartida de KnnVectorDict
             KnnVectorDict vectorDictInstance = null;
             long vectorDictSize = 0;
@@ -167,44 +149,32 @@ public class IndexFiles implements AutoCloseable {
                 vectorDictSize = vectorDictInstance.ramBytesUsed();
             }
 
-            // Creamos el executor y la lista de tareas
+            // Creamos el executor
             ExecutorService executor = Executors.newFixedThreadPool(numThreads);
-            List<Future<?>> futures = new ArrayList<>();
+            // Loop through some folders and submit a task for each one
+        IndexWriter writer = null;
+        IndexFiles indexFiles = null;
+        try {
+            writer = new IndexWriter(dir, iwc);
+             indexFiles = new IndexFiles(vectorDictInstance);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
 
-            // Iteramos por los directorios y creamos una tarea para cada uno
-            try (DirectoryStream<Path> directoryStream = Files.newDirectoryStream(docDir)) {
-                for (final Path path : directoryStream) {
-                    if (Files.isDirectory(path)) {
-                        KnnVectorDict finalVectorDictInstance = vectorDictInstance;
-                        futures.add(executor.submit(() -> {
-                            try (IndexWriter writer = new IndexWriter(FSDirectory.open(path), iwc)) {
-                                IndexFiles indexFiles = new IndexFiles(finalVectorDictInstance);
-                                indexFiles.indexDocs(writer, path, finalVectorDictInstance);
-                            } catch (IOException e) {
-                                e.printStackTrace();
-                            }
-                        }));
-                    }
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
-            } finally {
-                executor.shutdown();
+
+        for (Path folder : getFolders(docsPath)) {
+                Runnable worker = new WorkerThread(folder, writer, indexFiles);
+                worker.run();
             }
 
-            // Esperamos a que todas las tareas finalicen
-            for (Future<?> future : futures) {
-                try {
-                    future.get();
-                } catch (InterruptedException | ExecutionException e) {
-                    e.printStackTrace();
-                }
-            }
+
+            // Shutdown the thread pool once all tasks have completed
+            executor.shutdown();
 
             // Cerramos la instancia de KnnVectorDict
-            IOUtils.close(vectorDictInstance);
-
+           // IOUtils.close(vectorDictInstance);
             Date end = new Date();
+
             try (IndexReader reader = DirectoryReader.open(dir)) {
                 System.out.println(
                         "Indexed "
@@ -213,16 +183,58 @@ public class IndexFiles implements AutoCloseable {
                                 + (end.getTime() - start.getTime())
                                 + " milliseconds");
                 if (reader.numDocs() > 100
-                        && vectorDictSize < 1_000_000
+                        //&& vectorDictSize < 1_000_000
                         && System.getProperty("smoketester") == null) {
                     throw new RuntimeException(
                             "Are you (ab)using the toy vector dictionary? See the package javadocs to understand why you got this exception.");
                 }
             }
-        } catch (IOException e) {
-            System.out.println(" caught a " + e.getClass() + "\n with message: " + e.getMessage());
-        }
     }
+
+
+    private static Path[] getFolders(String dir) throws IOException {
+        return Files.walk(Paths.get(dir), 1)
+                .skip(1)
+                .filter(Files::isDirectory)
+                .toArray(Path[]::new);
+    }
+
+
+    //no implemente el vectorDictInstance, pero iria dentro de new IndexFiles(AQUI)
+    static class WorkerThread implements Runnable {
+
+        private final Path folder;
+        private final IndexWriter writer;
+        private final IndexFiles files;
+
+        public WorkerThread(Path folder, IndexWriter writer, IndexFiles files) {
+            this.folder = folder;
+            this.writer = writer;
+            this.files = files;
+        }
+
+        @Override
+        public void run() {
+            // NOTE: if you want to maximize search performance,
+                // you can optionally call forceMerge here.  This can be
+                // a terribly costly operation, so generally it's only
+                // worth it when your index is relatively static (ie
+                // you're done adding documents to it):
+                //
+                // writer.forceMerge(1);
+            try {
+                indexDocs(writer, folder, files);
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            }/**finally {
+                IOUtils.close(vectorDictInstance);
+            }*/
+        }
+
+    }
+
+
+
 
     /**
      * Indexes the given file using the given writer, or if a directory is given, recurses over files
@@ -236,10 +248,10 @@ public class IndexFiles implements AutoCloseable {
      *
      * @param writer Writer to the index where the given file/dir info will be stored
      * @param path The file to index, or the directory to recurse into to find files to index
-     * @param finalVectorDictInstance
      * @throws IOException If there is a low-level I/O error
      */
-    void indexDocs(final IndexWriter writer, Path path, KnnVectorDict finalVectorDictInstance) throws IOException {
+    //files solamente esta para pasar el vectorknn pero creo que asi no esta bien implementado a parte
+    public static void indexDocs(final IndexWriter writer, Path path, IndexFiles files) throws IOException {
         if (Files.isDirectory(path)) {
             Files.walkFileTree(
                     path,
@@ -247,7 +259,7 @@ public class IndexFiles implements AutoCloseable {
                         @Override
                         public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                             try {
-                                indexDoc(writer, file, attrs.lastModifiedTime().toMillis());
+                                indexDoc(writer, file, attrs.lastModifiedTime().toMillis(), files);
                             } catch (
                                     @SuppressWarnings("unused")
                                             IOException ignore) {
@@ -258,12 +270,14 @@ public class IndexFiles implements AutoCloseable {
                         }
                     });
         } else {
-            indexDoc(writer, path, Files.getLastModifiedTime(path).toMillis());
+            indexDoc(writer, path, Files.getLastModifiedTime(path).toMillis(), files);
         }
     }
 
+
+
     /** Indexes a single document */
-    void indexDoc(IndexWriter writer, Path file, long lastModified) throws IOException {
+    public static void indexDoc(IndexWriter writer, Path file, long lastModified, IndexFiles files) throws IOException {
         try (InputStream stream = Files.newInputStream(file)) {
             // make a new, empty document
             Document doc = new Document();
@@ -293,16 +307,15 @@ public class IndexFiles implements AutoCloseable {
                             "contents",
                             new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))));
 
-            if (demoEmbeddings != null) {
+            if (files.demoEmbeddings != null) {
                 try (InputStream in = Files.newInputStream(file)) {
                     float[] vector =
-                            demoEmbeddings.computeEmbedding(
+                            files.demoEmbeddings.computeEmbedding(
                                     new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8)));
                     doc.add(
                             new KnnVectorField("contents-vector", vector, VectorSimilarityFunction.DOT_PRODUCT));
                 }
             }
-
             if (writer.getConfig().getOpenMode() == OpenMode.CREATE) {
                 // New index, so we just add the document (no old document can be there):
                 System.out.println("adding " + file);
@@ -319,7 +332,7 @@ public class IndexFiles implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
-        IOUtils.close(vectorDict);
+        //IOUtils.close(vectorDict);
     }
 }
 
