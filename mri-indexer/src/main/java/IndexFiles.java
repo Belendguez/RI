@@ -23,20 +23,20 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
+import java.util.concurrent.TimeUnit;
+import java.util.EnumSet;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
-import org.apache.lucene.demo.knn.DemoEmbeddings;
-import org.apache.lucene.demo.knn.KnnVectorDict;
 import org.apache.lucene.document.*;
 import org.apache.lucene.index.*;
 import org.apache.lucene.index.IndexWriterConfig.OpenMode;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
-import org.apache.lucene.util.IOUtils;
 
 /**
  * Index all text files under a directory.
@@ -44,35 +44,19 @@ import org.apache.lucene.util.IOUtils;
  * <p>This is a command-line application demonstrating simple Lucene indexing. Run it with no
  * command-line arguments for usage information.
  */
-public class IndexFiles implements AutoCloseable {
-    static final String KNN_DICT = "knn-dict";
-
-    // Calculates embedding vectors for KnnVector search
-    private final DemoEmbeddings demoEmbeddings;
-    private final KnnVectorDict vectorDict;
-
-    private IndexFiles(KnnVectorDict vectorDict) throws IOException {
-        if (vectorDict != null) {
-            this.vectorDict = vectorDict;
-            demoEmbeddings = new DemoEmbeddings(vectorDict);
-        } else {
-            this.vectorDict = null;
-            demoEmbeddings = null;
-        }
-    }
-
+public class IndexFiles{
+    public static int depth = -1;
 
     /** Index all text files under a directory. */
     public static void main(String[] args) throws Exception {
         String usage =
                 "java org.apache.lucene.demo.IndexFiles"
-                        + " [-index INDEX_PATH] [-docs DOCS_PATH] [-update] [-knn_dict DICT_PATH]\n\n"
+                        + " [-index INDEX_PATH] [-docs DOCS_PATH] [-update || -create] [-numThreads NUM_THREADS]\n\n"
                         + "This indexes the documents in DOCS_PATH, creating a Lucene index"
-                        + "in INDEX_PATH that can be searched with SearchFiles\n"
-                        + "IF DICT_PATH contains a KnnVector dictionary, the index will also support KnnVector search";
+                        + "in INDEX_PATH that can be searched with SearchFiles\n";
+
         String indexPath = "index";
         String docsPath = null;
-        String vectorDictSource = null;
         Integer numThreads = null;
         boolean create = true;
         for (int i = 0; i < args.length; i++) {
@@ -83,9 +67,6 @@ public class IndexFiles implements AutoCloseable {
                 case "-docs":
                     docsPath = args[++i];
                     break;
-                case "-knn_dict":
-                    vectorDictSource = args[++i];
-                    break;
                 case "-update":
                     create = false;
                     break;
@@ -94,6 +75,9 @@ public class IndexFiles implements AutoCloseable {
                     break;
                 case "-numThreads":
                     numThreads = Integer.parseInt(args[++i]);
+                    break;
+                case "-depth":
+                    depth = Integer.parseInt(args[++i]);
                     break;
                 default:
                     throw new IllegalArgumentException("unknown parameter " + args[i]);
@@ -107,6 +91,10 @@ public class IndexFiles implements AutoCloseable {
         if (numThreads == null)
             numThreads = Runtime.getRuntime().availableProcessors();
 
+        if(depth == 0){
+            System.out.println("No se indexara nada, depth = " + depth);
+            System.exit(0);
+        }
 
         //Comprobar directorio
         final Path docDir = Paths.get(docsPath);
@@ -120,75 +108,85 @@ public class IndexFiles implements AutoCloseable {
         Date start = new Date();
         System.out.println("Indexing to directory '" + indexPath + "'...");
 
-        Directory dir = FSDirectory.open(Paths.get(indexPath));
-        Analyzer analyzer = new StandardAnalyzer();
-        IndexWriterConfig iwc = new IndexWriterConfig(analyzer);
+        // Optional: for better indexing performance, if you
+        // are indexing many documents, increase the RAM
+        // buffer.  But if you do this, increase the max heap
+        // size to the JVM (eg add -Xmx512m or -Xmx1g):
+        //
+        // iwc.setRAMBufferSizeMB(256.0);
 
+        // Creamos el executor
+        ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+
+        //Cada carpeta se la mandamos a su thread
+        ArrayList<Path> partialIndexPaths = new ArrayList<>();
+        List<Thread> threads = new ArrayList<Thread>();
+        for (Path folder : getFolders(docsPath)) {
+            Analyzer analyzer = new StandardAnalyzer();
+            IndexWriterConfig iwc = new IndexWriterConfig(analyzer);
+            if (create) {
+                // Create a new index in the directory, removing any
+                // previously indexed documents:
+                iwc.setOpenMode(OpenMode.CREATE);
+            } else {
+                // Add new documents to an existing index:
+                iwc.setOpenMode(OpenMode.CREATE_OR_APPEND);
+            }
+            String foldersin = folder.toString().replaceFirst(docsPath, "");
+            Directory subindexpath = FSDirectory.open(Path.of(indexPath+"\\"+foldersin));
+            partialIndexPaths.add(Path.of(indexPath+"\\"+foldersin));
+            IndexWriter writer = new IndexWriter(subindexpath, iwc);
+            final Runnable worker = new WorkerThread(folder, writer);
+            executor.execute(worker);
+            }
+
+
+        executor.shutdown();
+
+        /* Wait up to 1 hour to finish all the previously submitted jobs */
+        try {
+            executor.awaitTermination(1, TimeUnit.HOURS);
+        } catch (final InterruptedException e) {
+            e.printStackTrace();
+            System.exit(-2);
+        }
+
+
+        //Creamos el indice general de los subindices
+        System.out.println("Indices parciales creados, creando indice general: "+ indexPath);
+        Directory indexpath = FSDirectory.open(Path.of(indexPath));
+        IndexWriterConfig cnf = new IndexWriterConfig(new StandardAnalyzer());
         if (create) {
             // Create a new index in the directory, removing any
             // previously indexed documents:
-            iwc.setOpenMode(OpenMode.CREATE);
+            cnf.setOpenMode(OpenMode.CREATE);
         } else {
             // Add new documents to an existing index:
-            iwc.setOpenMode(OpenMode.CREATE_OR_APPEND);
+            cnf.setOpenMode(OpenMode.CREATE_OR_APPEND);
         }
-
-
-            // Optional: for better indexing performance, if you
-            // are indexing many documents, increase the RAM
-            // buffer.  But if you do this, increase the max heap
-            // size to the JVM (eg add -Xmx512m or -Xmx1g):
-            //
-            // iwc.setRAMBufferSizeMB(256.0);
-            // Creamos la instancia compartida de KnnVectorDict
-            KnnVectorDict vectorDictInstance = null;
-            long vectorDictSize = 0;
-            if (vectorDictSource != null) {
-                KnnVectorDict.build(Paths.get(vectorDictSource), dir, KNN_DICT);
-                vectorDictInstance = new KnnVectorDict(dir, KNN_DICT);
-                vectorDictSize = vectorDictInstance.ramBytesUsed();
-            }
-
-            // Creamos el executor
-            ExecutorService executor = Executors.newFixedThreadPool(numThreads);
-            // Loop through some folders and submit a task for each one
-        IndexWriter writer = null;
-        IndexFiles indexFiles = null;
-        try {
-            writer = new IndexWriter(dir, iwc);
-             indexFiles = new IndexFiles(vectorDictInstance);
-        } catch (IOException e) {
-            e.printStackTrace();
+        IndexWriter writerc = new IndexWriter(indexpath, cnf);
+        for (Path path : partialIndexPaths){
+            writerc.addIndexes(FSDirectory.open(path));
         }
+        writerc.commit();
+        writerc.close();
+
+        Date end = new Date();
 
 
-        for (Path folder : getFolders(docsPath)) {
-                Runnable worker = new WorkerThread(folder, writer, indexFiles);
-                worker.run();
+        //Leemos el indice general
+        try (IndexReader reader = DirectoryReader.open(FSDirectory.open(Path.of(indexPath)))) {
+            System.out.println(
+                    "Indexed "
+                            + reader.numDocs()
+                            + " documents in "
+                            + (end.getTime() - start.getTime())
+                            + " milliseconds");
+            if (reader.numDocs() > 100 && System.getProperty("smoketester") == null) {
+                throw new RuntimeException(
+                        "Are you (ab)using the toy vector dictionary? See the package javadocs to understand why you got this exception.");
             }
-
-
-            // Shutdown the thread pool once all tasks have completed
-            executor.shutdown();
-
-            // Cerramos la instancia de KnnVectorDict
-           // IOUtils.close(vectorDictInstance);
-            Date end = new Date();
-
-            try (IndexReader reader = DirectoryReader.open(dir)) {
-                System.out.println(
-                        "Indexed "
-                                + reader.numDocs()
-                                + " documents in "
-                                + (end.getTime() - start.getTime())
-                                + " milliseconds");
-                if (reader.numDocs() > 100
-                        //&& vectorDictSize < 1_000_000
-                        && System.getProperty("smoketester") == null) {
-                    throw new RuntimeException(
-                            "Are you (ab)using the toy vector dictionary? See the package javadocs to understand why you got this exception.");
-                }
-            }
+        }
     }
 
 
@@ -200,17 +198,15 @@ public class IndexFiles implements AutoCloseable {
     }
 
 
-    //no implemente el vectorDictInstance, pero iria dentro de new IndexFiles(AQUI)
+
     static class WorkerThread implements Runnable {
 
         private final Path folder;
         private final IndexWriter writer;
-        private final IndexFiles files;
 
-        public WorkerThread(Path folder, IndexWriter writer, IndexFiles files) {
+        public WorkerThread(Path folder, IndexWriter writer) {
             this.folder = folder;
             this.writer = writer;
-            this.files = files;
         }
 
         @Override
@@ -223,12 +219,14 @@ public class IndexFiles implements AutoCloseable {
                 //
                 // writer.forceMerge(1);
             try {
-                indexDocs(writer, folder, files);
-            } catch (IOException ex) {
-                ex.printStackTrace();
-            }/**finally {
-                IOUtils.close(vectorDictInstance);
-            }*/
+                System.out.println("Soy el hilo "+ Thread.currentThread().getName()+" y voy a indexar las entradas de la carpeta: "+folder);
+                indexDocs(writer, folder);
+                writer.close();
+                System.out.println("Soy el hilo "+ Thread.currentThread().getName()+" y he acabado de indexar las entradas de la carpeta: "+folder);
+
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
 
     }
@@ -250,34 +248,45 @@ public class IndexFiles implements AutoCloseable {
      * @param path The file to index, or the directory to recurse into to find files to index
      * @throws IOException If there is a low-level I/O error
      */
-    //files solamente esta para pasar el vectorknn pero creo que asi no esta bien implementado a parte
-    public static void indexDocs(final IndexWriter writer, Path path, IndexFiles files) throws IOException {
+    public static void indexDocs(final IndexWriter writer, Path path) throws IOException {
         if (Files.isDirectory(path)) {
-            Files.walkFileTree(
-                    path,
-                    new SimpleFileVisitor<>() {
+            if (depth > 0) {
+                // Si la profundidad es mayor que 0, solo busca hasta el nivel indicado
+                //SALTA EXCEPCION DE QUE NO TIENE PERMISO PERO FUNCIONA-----------------------------------------
+                Files.walkFileTree(path, EnumSet.noneOf(FileVisitOption.class), depth, new SimpleFileVisitor<>() {
+                    @Override
+                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                        try {
+                            indexDoc(writer, file, attrs.lastModifiedTime().toMillis());
+                        } catch (@SuppressWarnings("unused") IOException e) {
+                            e.printStackTrace(System.err);
+                        }
+                        return FileVisitResult.CONTINUE;
+                    }
+                });
+            }
+            else{
+            Files.walkFileTree(path, new SimpleFileVisitor<>() {
                         @Override
                         public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                             try {
-                                indexDoc(writer, file, attrs.lastModifiedTime().toMillis(), files);
-                            } catch (
-                                    @SuppressWarnings("unused")
-                                            IOException ignore) {
+                                indexDoc(writer, file, attrs.lastModifiedTime().toMillis());
+                            } catch (@SuppressWarnings("unused") IOException ignore) {
                                 ignore.printStackTrace(System.err);
                                 // don't index files that can't be read.
                             }
                             return FileVisitResult.CONTINUE;
                         }
                     });
-        } else {
-            indexDoc(writer, path, Files.getLastModifiedTime(path).toMillis(), files);
+        }}else {
+            indexDoc(writer, path, Files.getLastModifiedTime(path).toMillis());
         }
     }
 
 
 
     /** Indexes a single document */
-    public static void indexDoc(IndexWriter writer, Path file, long lastModified, IndexFiles files) throws IOException {
+    public static void indexDoc(IndexWriter writer, Path file, long lastModified) throws IOException {
         try (InputStream stream = Files.newInputStream(file)) {
             // make a new, empty document
             Document doc = new Document();
@@ -307,15 +316,6 @@ public class IndexFiles implements AutoCloseable {
                             "contents",
                             new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))));
 
-            if (files.demoEmbeddings != null) {
-                try (InputStream in = Files.newInputStream(file)) {
-                    float[] vector =
-                            files.demoEmbeddings.computeEmbedding(
-                                    new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8)));
-                    doc.add(
-                            new KnnVectorField("contents-vector", vector, VectorSimilarityFunction.DOT_PRODUCT));
-                }
-            }
             if (writer.getConfig().getOpenMode() == OpenMode.CREATE) {
                 // New index, so we just add the document (no old document can be there):
                 System.out.println("adding " + file);
@@ -328,11 +328,6 @@ public class IndexFiles implements AutoCloseable {
                 writer.updateDocument(new Term("path", file.toString()), doc);
             }
         }
-    }
-
-    @Override
-    public void close() throws IOException {
-        //IOUtils.close(vectorDict);
     }
 }
 
