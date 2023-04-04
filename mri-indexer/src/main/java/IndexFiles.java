@@ -262,9 +262,10 @@ public class IndexFiles{
      */
     public static void indexDocs(final IndexWriter writer, Path path) throws IOException {
         if (Files.isDirectory(path)) {
-            if (depth > 0) {
-                // Si la profundidad es mayor que 0, solo busca hasta el nivel indicado
-                //SALTA EXCEPCION DE QUE NO TIENE PERMISO PERO FUNCIONA-----------------------------------------
+            if (depth = 0) {
+                System.out.println("Profundidad 0: no se indexa ningún documento.");
+            }
+            else if (depth > 0){
                 Files.walkFileTree(path, EnumSet.noneOf(FileVisitOption.class), depth, new SimpleFileVisitor<>() {
                     @Override
                     public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
