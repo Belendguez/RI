@@ -16,10 +16,7 @@
  * limitations under the License.
  */
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -132,9 +129,9 @@ public class IndexFiles{
                 // Add new documents to an existing index:
                 iwc.setOpenMode(OpenMode.CREATE_OR_APPEND);
             }
-            String foldersin = folder.toString().replaceFirst(docsPath, "");
-            Directory subindexpath = FSDirectory.open(Path.of(indexPath+"\\"+foldersin));
-            partialIndexPaths.add(Path.of(indexPath+"\\"+foldersin));
+            String foldersinpath = folder.toString().replaceFirst(docsPath, "");
+            Directory subindexpath = FSDirectory.open(Path.of(indexPath+"/temp/"+foldersinpath));
+            partialIndexPaths.add(Path.of(indexPath+"/temp/"+foldersinpath));
             IndexWriter writer = new IndexWriter(subindexpath, iwc);
             final Runnable worker = new WorkerThread(folder, writer);
             executor.execute(worker);
@@ -168,8 +165,8 @@ public class IndexFiles{
         for (Path path : partialIndexPaths){
             writerc.addIndexes(FSDirectory.open(path));
         }
-        writerc.commit();
         writerc.close();
+        deleteDirectory(new File(indexPath+"/temp"));
 
         Date end = new Date();
 
@@ -233,6 +230,21 @@ public class IndexFiles{
 
 
 
+    public static void deleteDirectory(File directory) {
+        if (directory.exists()) {
+            File[] files = directory.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    if (file.isDirectory()) {
+                        deleteDirectory(file);
+                    } else {
+                        file.delete();
+                    }
+                }
+            }
+            directory.delete();
+        }
+    }
 
     /**
      * Indexes the given file using the given writer, or if a directory is given, recurses over files
