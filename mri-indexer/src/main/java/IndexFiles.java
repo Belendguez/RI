@@ -262,7 +262,7 @@ public class IndexFiles{
      */
     public static void indexDocs(final IndexWriter writer, Path path) throws IOException {
         if (Files.isDirectory(path)) {
-            if (depth = 0) {
+            if (depth == 0) {
                 System.out.println("Profundidad 0: no se indexa ningún documento.");
             }
             else if (depth > 0){
