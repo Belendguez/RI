@@ -17,16 +17,18 @@
  */
 
 import java.io.*;
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
+import java.nio.file.attribute.FileTime;
+import java.util.*;
+
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.EnumSet;
+import java.util.stream.Collectors;
+
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.*;
@@ -34,6 +36,8 @@ import org.apache.lucene.index.*;
 import org.apache.lucene.index.IndexWriterConfig.OpenMode;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
+
+import javax.swing.plaf.synth.SynthLookAndFeel;
 
 /**
  * Index all text files under a directory.
@@ -43,6 +47,10 @@ import org.apache.lucene.store.FSDirectory;
  */
 public class IndexFiles{
     public static int depth = -1;
+    public static boolean contentsStored = false;
+    public static boolean contentsTermVectors = false;
+    public static Properties properties = new Properties();
+    public static String onlyLines;
 
     /** Index all text files under a directory. */
     public static void main(String[] args) throws Exception {
@@ -76,10 +84,18 @@ public class IndexFiles{
                 case "-depth":
                     depth = Integer.parseInt(args[++i]);
                     break;
+                case "-contentsStored":
+                    contentsStored = true;
+                    break;
+                case "-contentsTermVectors":
+                    contentsTermVectors = true;
+                    break;
                 default:
                     throw new IllegalArgumentException("unknown parameter " + args[i]);
             }
         }
+        properties.load(new FileReader("mri-indexer/src/main/resources/config.properties"));
+        onlyLines = properties.getProperty("onlyLines");
 
         if (docsPath == null) {
             System.err.println("Usage: " + usage);
@@ -117,7 +133,6 @@ public class IndexFiles{
 
         //Cada carpeta se la mandamos a su thread
         ArrayList<Path> partialIndexPaths = new ArrayList<>();
-        List<Thread> threads = new ArrayList<Thread>();
         for (Path folder : getFolders(docsPath)) {
             Analyzer analyzer = new StandardAnalyzer();
             IndexWriterConfig iwc = new IndexWriterConfig(analyzer);
@@ -228,6 +243,52 @@ public class IndexFiles{
 
     }
 
+    public static boolean extCompatible(Path file) throws IOException {
+        String onlyFilesn = properties.getProperty("onlyFiles");
+        String notFilesn = properties.getProperty("notFiles");
+        String fileName = file.getFileName().toString();
+        String extension = "";
+        int lastIndex = fileName.lastIndexOf('.');
+        if (lastIndex != -1) {
+            extension = fileName.substring(lastIndex);
+        }
+        if(!extension.equals("")){//Evitamos carpetas
+            // Si estan las dos identificar cual aparece primero en config.properties y aplicarla
+            if (onlyFilesn != null && notFilesn != null) {
+                int onlyFilesIndex = -1;
+                int notFilesIndex = -1;
+                int lineCount = 0;
+                try (BufferedReader reader = new BufferedReader(new FileReader("mri-indexer/src/main/resources/config.properties"))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (line.startsWith("onlyFiles")) {
+                            onlyFilesIndex = lineCount;
+                        } else if (line.startsWith("notFiles")) {
+                            notFilesIndex = lineCount;
+                        }
+                        lineCount++;
+                    }
+                }
+                if (onlyFilesIndex<notFilesIndex) {
+                    String[] onlyFiles = onlyFilesn.split(" ");
+                    return Arrays.asList(onlyFiles).contains(extension);
+                } else {
+                    String[] notFiles = notFilesn.split(" ");
+                    return !Arrays.asList(notFiles).contains(extension);
+                }
+            //Sino mirar una a una
+            } else if (notFilesn != null) {
+                String[] notFiles = notFilesn.split(" ");
+                return !Arrays.asList(notFiles).contains(extension);
+            } else if (onlyFilesn != null) {
+                String[] onlyFiles = onlyFilesn.split(" ");
+                return Arrays.asList(onlyFiles).contains(extension);
+            } else {
+                // Sino se indexan todos los archivos
+                return true;
+            }
+        }return true;
+    }
 
 
     public static void deleteDirectory(File directory) {
@@ -246,6 +307,7 @@ public class IndexFiles{
         }
     }
 
+
     /**
      * Indexes the given file using the given writer, or if a directory is given, recurses over files
      * and directories found under the given directory.
@@ -262,17 +324,14 @@ public class IndexFiles{
      */
     public static void indexDocs(final IndexWriter writer, Path path) throws IOException {
         if (Files.isDirectory(path)) {
-            if (depth == 0) {
-                System.out.println("Profundidad 0: no se indexa ningún documento.");
-            }
-            else if (depth > 0){
+           if (depth > 0){
                 Files.walkFileTree(path, EnumSet.noneOf(FileVisitOption.class), depth, new SimpleFileVisitor<>() {
                     @Override
-                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                        try {
+                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                            try {
                             indexDoc(writer, file, attrs.lastModifiedTime().toMillis());
                         } catch (@SuppressWarnings("unused") IOException e) {
-                            e.printStackTrace(System.err);
+                            //e.printStackTrace(System.err);
                         }
                         return FileVisitResult.CONTINUE;
                     }
@@ -283,7 +342,7 @@ public class IndexFiles{
                         @Override
                         public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                             try {
-                                indexDoc(writer, file, attrs.lastModifiedTime().toMillis());
+                                    indexDoc(writer, file, attrs.lastModifiedTime().toMillis());
                             } catch (@SuppressWarnings("unused") IOException ignore) {
                                 ignore.printStackTrace(System.err);
                                 // don't index files that can't be read.
@@ -300,45 +359,97 @@ public class IndexFiles{
 
     /** Indexes a single document */
     public static void indexDoc(IndexWriter writer, Path file, long lastModified) throws IOException {
-        try (InputStream stream = Files.newInputStream(file)) {
-            // make a new, empty document
-            Document doc = new Document();
+        if (extCompatible(file)) {
+            try (InputStream stream = Files.newInputStream(file)) {
+                // make a new, empty document
+                Document doc = new Document();
 
-            // Add the path of the file as a field named "path".  Use a
-            // field that is indexed (i.e. searchable), but don't tokenize
-            // the field into separate words and don't index term frequency
-            // or positional information:
-            Field pathField = new StringField("path", file.toString(), Field.Store.YES);
-            doc.add(pathField);
+                //INDEXAMOS EL PATH
+                Field pathField = new StringField("path", file.toString(), Field.Store.YES);
+                doc.add(pathField);
 
-            // Add the last modified date of the file a field named "modified".
-            // Use a LongPoint that is indexed (i.e. efficiently filterable with
-            // PointRangeQuery).  This indexes to milli-second resolution, which
-            // is often too fine.  You could instead create a number based on
-            // year/month/day/hour/minutes/seconds, down the resolution you require.
-            // For example the long value 2011021714 would mean
-            // February 17, 2011, 2-3 PM.
-            doc.add(new LongPoint("modified", lastModified));
+                //INDEXAMOS EL MODIFIED
+                doc.add(new LongPoint("modified", lastModified));
 
-            // Add the contents of the file to a field named "contents".  Specify a Reader,
-            // so that the text of the file is tokenized and indexed, but not stored.
-            // Note that FileReader expects the file to be in UTF-8 encoding.
-            // If that's not the case searching for special characters will fail.
-            doc.add(
-                    new TextField(
-                            "contents",
-                            new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))));
+                //INDEXAMOS EL CONTENT
+                //comprobamos content stored
+                FieldType fieldType;
+                if (contentsStored) {
+                    fieldType = new FieldType(TextField.TYPE_STORED);
+                } else {
+                    fieldType = new FieldType(TextField.TYPE_NOT_STORED);
+                }
+                //comprobamos TermsVectors
+                if (contentsTermVectors) {
+                    fieldType.setStoreTermVectors(true);
+                }
+                //Comprobamos OnlyLines
+                if (onlyLines != null) {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                        StringBuilder contents = new StringBuilder();
+                        String line;
+                        int lineCount = 0;
+                        while ((line = reader.readLine()) != null && lineCount < Integer.parseInt(onlyLines)) {
+                            contents.append(line).append("\n");
+                            lineCount++;
+                        }
+                        doc.add(new Field("contents", contents.toString(), fieldType));
+                    }
+                } else {
+                    if (contentsStored) {
+                        doc.add(new Field("contents", new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8)).lines().collect(Collectors.joining("\n")), fieldType));
+                    } else {
+                        doc.add(new Field("contents", new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8)), fieldType));
+                    }
+                }
 
-            if (writer.getConfig().getOpenMode() == OpenMode.CREATE) {
-                // New index, so we just add the document (no old document can be there):
-                System.out.println("adding " + file);
-                writer.addDocument(doc);
-            } else {
-                // Existing index (an old copy of this document may have been indexed) so
-                // we use updateDocument instead to replace the old one matching the exact
-                // path, if present:
-                System.out.println("updating " + file);
-                writer.updateDocument(new Term("path", file.toString()), doc);
+                //Obtener información del archivo
+                BasicFileAttributes attrs = Files.readAttributes(file, BasicFileAttributes.class);
+
+                //INDEXAMOS EL HOSTNAME Y EL THREAD
+                doc.add(new StringField("hostname", InetAddress.getLocalHost().getHostName(), Field.Store.YES));
+                doc.add(new StringField("thread", Thread.currentThread().getName(), Field.Store.YES));
+
+                //INDEXAMOS EL TIPO
+                String fileType = "otro";
+                if (attrs.isRegularFile()) {
+                    fileType = "regular file";
+                } else if (attrs.isDirectory()) {
+                    fileType = "directory";
+                } else if (attrs.isSymbolicLink()) {
+                    fileType = "symbolic link";
+                }
+                doc.add(new StringField("type", fileType, Field.Store.YES));
+
+                //INDEXAMOS EL TAMAÑO
+                long sizeKb = attrs.size() / 1024;
+                doc.add(new StoredField("sizeKb", sizeKb));
+
+                //INDEXAMOS LAS FECHAS
+                FileTime creationTime = attrs.creationTime();
+                FileTime lastAccessTime = attrs.lastAccessTime();
+                FileTime lastModifiedTime = attrs.lastModifiedTime();
+                doc.add(new StringField("creationTime", creationTime.toString(), Field.Store.YES));
+                doc.add(new StringField("lastAccessTime", lastAccessTime.toString(), Field.Store.YES));
+                doc.add(new StringField("lastModifiedTime", lastModifiedTime.toString(), Field.Store.YES));
+
+                // Indexar las fechas en el formato de Lucene
+                String creationTimeLucene = DateTools.dateToString(new Date(creationTime.toMillis()), DateTools.Resolution.MILLISECOND);
+                String lastAccessTimeLucene = DateTools.dateToString(new Date(lastAccessTime.toMillis()), DateTools.Resolution.MILLISECOND);
+                String lastModifiedTimeLucene = DateTools.dateToString(new Date(lastModifiedTime.toMillis()), DateTools.Resolution.MILLISECOND);
+                doc.add(new StringField("creationTimeLucene", creationTimeLucene, Field.Store.YES));
+                doc.add(new StringField("lastAccessTimeLucene", lastAccessTimeLucene, Field.Store.YES));
+                doc.add(new StringField("lastModifiedTimeLucene", lastModifiedTimeLucene, Field.Store.YES));
+
+
+                if (writer.getConfig().getOpenMode() == OpenMode.CREATE) {
+                    System.out.println("adding " + file);
+                    writer.addDocument(doc);
+                } else {
+
+                    System.out.println("updating " + file);
+                    writer.updateDocument(new Term("path", file.toString()), doc);
+                }
             }
         }
     }
