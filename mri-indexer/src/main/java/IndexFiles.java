@@ -22,6 +22,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 
 import java.util.concurrent.ExecutorService;
@@ -51,12 +53,18 @@ public class IndexFiles{
     public static boolean contentsTermVectors = false;
     public static Properties properties = new Properties();
     public static String onlyLines;
+    public static String onlyFilesn;
+    public static String notFilesn;
 
     /** Index all text files under a directory. */
     public static void main(String[] args) throws Exception {
+        properties.load(new FileReader("mri-indexer/src/main/resources/config.properties"));
+        onlyLines = properties.getProperty("onlyLines");
+        onlyFilesn = properties.getProperty("onlyFiles");
+        notFilesn = properties.getProperty("notFiles");
         String usage =
                 "java org.apache.lucene.demo.IndexFiles"
-                        + " [-index INDEX_PATH] [-docs DOCS_PATH] [-update || -create] [-numThreads NUM_THREADS]\n\n"
+                        + " [-index INDEX_PATH] [-docs DOCS_PATH] [-update || -create] [-numThreads NUM_THREADS] [-depth DEPTH] [-contentsStored] [-contentsTermVectors]\n\n"
                         + "This indexes the documents in DOCS_PATH, creating a Lucene index"
                         + "in INDEX_PATH that can be searched with SearchFiles\n";
 
@@ -94,8 +102,7 @@ public class IndexFiles{
                     throw new IllegalArgumentException("unknown parameter " + args[i]);
             }
         }
-        properties.load(new FileReader("mri-indexer/src/main/resources/config.properties"));
-        onlyLines = properties.getProperty("onlyLines");
+
 
         if (docsPath == null) {
             System.err.println("Usage: " + usage);
@@ -244,8 +251,6 @@ public class IndexFiles{
     }
 
     public static boolean extCompatible(Path file) throws IOException {
-        String onlyFilesn = properties.getProperty("onlyFiles");
-        String notFilesn = properties.getProperty("notFiles");
         String fileName = file.getFileName().toString();
         String extension = "";
         int lastIndex = fileName.lastIndexOf('.');
@@ -361,7 +366,6 @@ public class IndexFiles{
     public static void indexDoc(IndexWriter writer, Path file, long lastModified) throws IOException {
         if (extCompatible(file)) {
             try (InputStream stream = Files.newInputStream(file)) {
-                // make a new, empty document
                 Document doc = new Document();
 
                 //INDEXAMOS EL PATH
@@ -441,6 +445,13 @@ public class IndexFiles{
                 doc.add(new StringField("lastAccessTimeLucene", lastAccessTimeLucene, Field.Store.YES));
                 doc.add(new StringField("lastModifiedTimeLucene", lastModifiedTimeLucene, Field.Store.YES));
 
+                //Indexamos HASH SHA-256 para el RemoveDuplicates
+                MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                byte[] hash = digest.digest(Files.readAllBytes(file));
+                String hashString = Base64.getEncoder().encodeToString(hash);
+                Field hashField = new StringField("hash", hashString, Field.Store.YES);
+                doc.add(hashField);
+
 
                 if (writer.getConfig().getOpenMode() == OpenMode.CREATE) {
                     System.out.println("adding " + file);
@@ -450,6 +461,8 @@ public class IndexFiles{
                     System.out.println("updating " + file);
                     writer.updateDocument(new Term("path", file.toString()), doc);
                 }
+            } catch (NoSuchAlgorithmException e) {
+                e.printStackTrace();
             }
         }
     }
