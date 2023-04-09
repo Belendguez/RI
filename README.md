@@ -1,2 +1,0 @@
-# RI
-Practicas de RI
