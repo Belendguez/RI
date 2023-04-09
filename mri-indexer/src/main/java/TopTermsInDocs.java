@@ -18,9 +18,9 @@ public class TopTermsInDocs {
         int top = -1;
         String outfile = "output.txt";
         String usage = "Arguments: [-index INDEX_PATH] [-docID docID1-docID2] [-top N] [-outfile OUTFILE_PATH]\n\n";
-        //si no se pasa ningun rango se mirara en todos los docs
-        //outfile por defecto: output.txt
-        //index por defecto: index
+        //No range: We check all the files
+        //No outfile: Then it will be by default output.txt
+        //Default index: index
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-index":
@@ -55,13 +55,13 @@ public class TopTermsInDocs {
             rango2 = reader.maxDoc()-1;
         }
 
-        // Buscamos solo en el rago que necesitamos
+        // Search in the range specified.
         for (int i = rango1; i <= rango2; i++) {
             Terms terms = reader.getTermVector(i, "contents");
 
-            if (terms == null) continue;  //Si no existe -> al siguiente docID
+            if (terms == null) continue;  //If it doesn't exist, goes to the next
 
-            // Cola de prioridad para los Top Terms
+            // We used a priority Queue for this.
             PriorityQueue<TermScore> pq = new PriorityQueue<>(top);
 
             // Loop through the terms and calculate their tf-idf scores

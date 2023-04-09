@@ -1,20 +1,7 @@
-
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/**
+ *Alumno 1: 
+ *Alumno 2 Belen Domínguez Álvarez user:belen.domingueza
+*/
 
 import java.io.*;
 import java.net.InetAddress;
@@ -41,12 +28,6 @@ import org.apache.lucene.store.FSDirectory;
 
 import javax.swing.plaf.synth.SynthLookAndFeel;
 
-/**
- * Index all text files under a directory.
- *
- * <p>This is a command-line application demonstrating simple Lucene indexing. Run it with no
- * command-line arguments for usage information.
- */
 public class IndexFiles{
     public static int depth = -1;
     public static boolean contentsStored = false;
@@ -56,7 +37,7 @@ public class IndexFiles{
     public static String onlyFilesn;
     public static String notFilesn;
 
-    /** Index all text files under a directory. */
+    /** Index all text files under a directory. With their respective properties and other relevant information.*/
     public static void main(String[] args) throws Exception {
         properties.load(new FileReader("mri-indexer/src/main/resources/config.properties"));
         onlyLines = properties.getProperty("onlyLines");
@@ -116,7 +97,7 @@ public class IndexFiles{
             System.exit(0);
         }
 
-        //Comprobar directorio
+        //Check if the path to the directory is valid or not
         final Path docDir = Paths.get(docsPath);
         if (!Files.isReadable(docDir)) {
             System.out.println(
@@ -128,24 +109,17 @@ public class IndexFiles{
         Date start = new Date();
         System.out.println("Indexing to directory '" + indexPath + "'...");
 
-        // Optional: for better indexing performance, if you
-        // are indexing many documents, increase the RAM
-        // buffer.  But if you do this, increase the max heap
-        // size to the JVM (eg add -Xmx512m or -Xmx1g):
-        //
-        // iwc.setRAMBufferSizeMB(256.0);
-
-        // Creamos el executor
+        // Executor for the ThreadPool
         ExecutorService executor = Executors.newFixedThreadPool(numThreads);
 
-        //Cada carpeta se la mandamos a su thread
+        //Each Folder goes to his respective thread.
         ArrayList<Path> partialIndexPaths = new ArrayList<>();
         for (Path folder : getFolders(docsPath)) {
             Analyzer analyzer = new StandardAnalyzer();
             IndexWriterConfig iwc = new IndexWriterConfig(analyzer);
             if (create) {
                 // Create a new index in the directory, removing any
-                // previously indexed documents:
+                // previously indexed documents
                 iwc.setOpenMode(OpenMode.CREATE);
             } else {
                 // Add new documents to an existing index:
@@ -162,7 +136,7 @@ public class IndexFiles{
 
         executor.shutdown();
 
-        /* Wait up to 1 hour to finish all the previously submitted jobs */
+        /* Wait up to 1 hour to finish all the previously submitted jobs.*/
         try {
             executor.awaitTermination(1, TimeUnit.HOURS);
         } catch (final InterruptedException e) {
@@ -171,7 +145,7 @@ public class IndexFiles{
         }
 
 
-        //Creamos el indice general de los subindices
+        //Creating the general index for the subindex generated
         System.out.println("Indices parciales creados, creando indice general: "+ indexPath);
         Directory indexpath = FSDirectory.open(Path.of(indexPath));
         IndexWriterConfig cnf = new IndexWriterConfig(new StandardAnalyzer());
@@ -193,7 +167,7 @@ public class IndexFiles{
         Date end = new Date();
 
 
-        //Leemos el indice general
+        //Reading the index created.
         try (IndexReader reader = DirectoryReader.open(FSDirectory.open(Path.of(indexPath)))) {
             System.out.println(
                     "Indexed "
@@ -230,13 +204,6 @@ public class IndexFiles{
 
         @Override
         public void run() {
-            // NOTE: if you want to maximize search performance,
-                // you can optionally call forceMerge here.  This can be
-                // a terribly costly operation, so generally it's only
-                // worth it when your index is relatively static (ie
-                // you're done adding documents to it):
-                //
-                // writer.forceMerge(1);
             try {
                 System.out.println("Soy el hilo "+ Thread.currentThread().getName()+" y voy a indexar las entradas de la carpeta: "+folder);
                 indexDocs(writer, folder);
@@ -257,8 +224,10 @@ public class IndexFiles{
         if (lastIndex != -1) {
             extension = fileName.substring(lastIndex);
         }
-        if(!extension.equals("")){//Evitamos carpetas
-            // Si estan las dos identificar cual aparece primero en config.properties y aplicarla
+        if(!extension.equals("")){
+            //If possible we avoid folders.
+            //If the two rules are active, identify which is the first one that appears in 
+            //config properties and apply it. 
             if (onlyFilesn != null && notFilesn != null) {
                 int onlyFilesIndex = -1;
                 int notFilesIndex = -1;
@@ -281,7 +250,7 @@ public class IndexFiles{
                     String[] notFiles = notFilesn.split(" ");
                     return !Arrays.asList(notFiles).contains(extension);
                 }
-            //Sino mirar una a una
+            //We look one by one
             } else if (notFilesn != null) {
                 String[] notFiles = notFilesn.split(" ");
                 return !Arrays.asList(notFiles).contains(extension);
@@ -289,7 +258,7 @@ public class IndexFiles{
                 String[] onlyFiles = onlyFilesn.split(" ");
                 return Arrays.asList(onlyFiles).contains(extension);
             } else {
-                // Sino se indexan todos los archivos
+                // We index all archives.
                 return true;
             }
         }return true;
@@ -316,16 +285,6 @@ public class IndexFiles{
     /**
      * Indexes the given file using the given writer, or if a directory is given, recurses over files
      * and directories found under the given directory.
-     *
-     * <p>NOTE: This method indexes one document per input file. This is slow. For good throughput,
-     * put multiple documents into your input file(s). An example of this is in the benchmark module,
-     * which can create "line doc" files, one document per line, using the <a
-     * href="../../../../../contrib-benchmark/org/apache/lucene/benchmark/byTask/tasks/WriteLineDocTask.html"
-     * >WriteLineDocTask</a>.
-     *
-     * @param writer Writer to the index where the given file/dir info will be stored
-     * @param path The file to index, or the directory to recurse into to find files to index
-     * @throws IOException If there is a low-level I/O error
      */
     public static void indexDocs(final IndexWriter writer, Path path) throws IOException {
         if (Files.isDirectory(path)) {
@@ -368,26 +327,26 @@ public class IndexFiles{
             try (InputStream stream = Files.newInputStream(file)) {
                 Document doc = new Document();
 
-                //INDEXAMOS EL PATH
+                //Path
                 Field pathField = new StringField("path", file.toString(), Field.Store.YES);
                 doc.add(pathField);
 
-                //INDEXAMOS EL MODIFIED
+                //Modified
                 doc.add(new LongPoint("modified", lastModified));
 
-                //INDEXAMOS EL CONTENT
-                //comprobamos content stored
+                //Content
+                //We check the content stored
                 FieldType fieldType;
                 if (contentsStored) {
                     fieldType = new FieldType(TextField.TYPE_STORED);
                 } else {
                     fieldType = new FieldType(TextField.TYPE_NOT_STORED);
                 }
-                //comprobamos TermsVectors
+                //Check TermsVectors
                 if (contentsTermVectors) {
                     fieldType.setStoreTermVectors(true);
                 }
-                //Comprobamos OnlyLines
+                //Check OnlyLines
                 if (onlyLines != null) {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
                         StringBuilder contents = new StringBuilder();
@@ -407,14 +366,14 @@ public class IndexFiles{
                     }
                 }
 
-                //Obtener información del archivo
+                //information about the archive
                 BasicFileAttributes attrs = Files.readAttributes(file, BasicFileAttributes.class);
 
-                //INDEXAMOS EL HOSTNAME Y EL THREAD
+                //Hostname and thread
                 doc.add(new StringField("hostname", InetAddress.getLocalHost().getHostName(), Field.Store.YES));
                 doc.add(new StringField("thread", Thread.currentThread().getName(), Field.Store.YES));
 
-                //INDEXAMOS EL TIPO
+                //Type
                 String fileType = "otro";
                 if (attrs.isRegularFile()) {
                     fileType = "regular file";
@@ -425,11 +384,11 @@ public class IndexFiles{
                 }
                 doc.add(new StringField("type", fileType, Field.Store.YES));
 
-                //INDEXAMOS EL TAMAÑO
+                //Size
                 long sizeKb = attrs.size() / 1024;
                 doc.add(new StoredField("sizeKb", sizeKb));
 
-                //INDEXAMOS LAS FECHAS
+                //Date
                 FileTime creationTime = attrs.creationTime();
                 FileTime lastAccessTime = attrs.lastAccessTime();
                 FileTime lastModifiedTime = attrs.lastModifiedTime();
@@ -437,7 +396,7 @@ public class IndexFiles{
                 doc.add(new StringField("lastAccessTime", lastAccessTime.toString(), Field.Store.YES));
                 doc.add(new StringField("lastModifiedTime", lastModifiedTime.toString(), Field.Store.YES));
 
-                // Indexar las fechas en el formato de Lucene
+                // Date in Lucene Format
                 String creationTimeLucene = DateTools.dateToString(new Date(creationTime.toMillis()), DateTools.Resolution.MILLISECOND);
                 String lastAccessTimeLucene = DateTools.dateToString(new Date(lastAccessTime.toMillis()), DateTools.Resolution.MILLISECOND);
                 String lastModifiedTimeLucene = DateTools.dateToString(new Date(lastModifiedTime.toMillis()), DateTools.Resolution.MILLISECOND);
@@ -445,7 +404,7 @@ public class IndexFiles{
                 doc.add(new StringField("lastAccessTimeLucene", lastAccessTimeLucene, Field.Store.YES));
                 doc.add(new StringField("lastModifiedTimeLucene", lastModifiedTimeLucene, Field.Store.YES));
 
-                //Indexamos HASH SHA-256 para el RemoveDuplicates
+                //HASH SHA-256 for the RemoveDuplicates
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 byte[] hash = digest.digest(Files.readAllBytes(file));
                 String hashString = Base64.getEncoder().encodeToString(hash);
