@@ -10,6 +10,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class RemoveDuplicates {
+    //Allows to remove to archives with the same exact content.
+    //For this we use the Hash we have previously indexed in the class indexFiles 
+    //during the creation of the index
     public static void main (String[] args) throws IOException {
         String indexPath = "index";
         String outPath = "indexNoDup";
