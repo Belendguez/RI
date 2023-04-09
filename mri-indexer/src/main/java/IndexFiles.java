@@ -1,6 +1,6 @@
 /**
- *Alumno 1: 
- *Alumno 2 Belen Domínguez Álvarez user:belen.domingueza
+ *Alumno 1: Pablo Paramo Telle user:pablo.paramo.telle
+ *Alumno 2: Belen Domínguez Álvarez user:belen.domingueza
 */
 
 import java.io.*;
